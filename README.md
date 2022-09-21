@@ -1,4 +1,4 @@
-# Chess Pieces Recognition
+# Chessboard Recognition
 
 
 <p align="center">
