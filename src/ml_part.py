@@ -29,13 +29,15 @@ class_names = tuple(train_ds.class_names)
 def predict(img):
     print('Predicting...')
     image = np.array(img)
-    image = tf.image.resize(img, (300, 300))
-    image = tf.expand_dims(img, 0)
+    image = tf.image.resize(image, (300, 300))
+    image = tf.expand_dims(image, 0)
     prediction_scores = model.predict(image)
+    print("Prediction scores:", prediction_scores)
     predicted_index = np.argmax(prediction_scores)
+    print("Predicted index:", predicted_index)
     print("Predicted label: " + class_names[predicted_index])
     return class_names[predicted_index]
 
 
-img = tf.keras.preprocessing.image.load_img('../assets/pieces/black_queen/')
+img = tf.keras.preprocessing.image.load_img('../assets/chess_pieces/black_queen/black_queen_1.png')
 predict(img)
