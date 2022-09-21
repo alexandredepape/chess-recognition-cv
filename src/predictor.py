@@ -104,25 +104,13 @@ def detect_2dChessboard(original_image, filename):
         contours, contours_image = find_contours(image, original_image, step_images)
         contours, contours_image = find_contours(contours_image, original_image, step_images)
 
-        # finx convex contours and draw them
-        contours_area = [cv.contourArea(contour) for contour in contours]
-        counter = Counter(contours_area)
 
-        contours_by_area = {}
-        for area, count in counter.items():
-            contours_by_area[area] = [contour for contour in contours if cv.contourArea(contour) == area]
 
-        black_image = get_black_image(original_image)
-        for area, c in contours_by_area.items():
-            random_color = list(np.random.randint(0, 255, 3))
-            color = (int(random_color[0]), int(random_color[1]), int(random_color[2]))
-            cv.drawContours(black_image, c, -1, color, 3)
-
-        step_images.append(black_image)
-        contours = draw_contours(four_sided_contours, original_image, step_images)
-
+        # find the largest contour
+        largest_contour = max(contours, key=cv.contourArea)
+        # find the convex hull of the largest contour
         biggest_contour_image = get_black_image(original_image)
-        cv.drawContours(biggest_contour_image, contours, -1, (0, 255, 0), 2)
+        cv.drawContours(biggest_contour_image, [largest_contour], -1, (0, 255, 0), 2)
         step_images.append(biggest_contour_image)
 
         hough_lines_image, lines = hough_lines(biggest_contour_image, original_image, step_images)
