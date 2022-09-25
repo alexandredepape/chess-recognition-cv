@@ -6,4 +6,4 @@
 </p>
 
 
-This projects attempts to take the image of a 2D board, crop the board, predict the pieces on it and output a FEN notation.
+This project attempts to take the image of a 2D board, crop the board, predict the pieces on it and output a FEN notation.
