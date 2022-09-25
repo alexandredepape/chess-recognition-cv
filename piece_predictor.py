@@ -4,8 +4,9 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow import keras
+import cv2 as cv
 
-MODELNAME = '../models/greatmodel.h5'
+MODELNAME = './models/greatmodel.h5'
 IMAGE_SIZE = (300, 300)
 
 
@@ -31,4 +32,6 @@ class PiecePredictor:
         predicted_index = np.argmax(prediction_scores)
         # print("Predicted index:", predicted_index)
         # print("Predicted label: " + self.class_names[predicted_index])
-        return self.class_names[predicted_index]
+        prediction = self.class_names[predicted_index]
+        cv.imwrite('output/' + prediction + '.png', img)
+        return prediction

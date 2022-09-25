@@ -5,17 +5,7 @@ import traceback
 
 import cv2 as cv
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')
-from matplotlib import pyplot as plt
 from scipy.spatial import ConvexHull
-import poly_point_isect
-
-os.system("rm -rf output/*")
-# create the ouput folder if it doesn't exist:
-if not os.path.exists("output"):
-    os.makedirs("output")
-
 
 
 # put the code above in a function
@@ -84,7 +74,16 @@ def four_point_transform(original_image, convex_hull_points):
     return warped
 
 
+def cluster_1d_data(data):
+    from sklearn.cluster import DBSCAN
+    import numpy as np
+    X = np.array(data).reshape(-1, 1)
+    db = DBSCAN(eps=5, min_samples=1).fit(X)
+    return db.labels_
+
+
 def detect_2dChessboard(original_image, filename):
+    print("Detecting 2D chessboard...")
     STEPS = [greyscale,
              # equalisation,
              # gaussianblur,
@@ -99,12 +98,8 @@ def detect_2dChessboard(original_image, filename):
         for step in STEPS:
             image = step(image, step_images)
 
-
-
         contours, contours_image = find_contours(image, original_image, step_images)
         contours, contours_image = find_contours(contours_image, original_image, step_images)
-
-
 
         # find the largest contour
         largest_contour = max(contours, key=cv.contourArea)
@@ -114,15 +109,48 @@ def detect_2dChessboard(original_image, filename):
         step_images.append(biggest_contour_image)
 
         hough_lines_image, lines = hough_lines(biggest_contour_image, original_image, step_images)
-        merged_lines, bundled_image = bundle_lines(lines, original_image, step_images)
+        merged_lines, bundled_image = bundle_lines(lines, original_image, step_images, min_distance=100)
 
-        extend_lines_image, extended_lines = extend_lines(merged_lines, hough_lines_image, step_images)
+        # sort the lines by groups of 10 degress orientation
+        orientations = {}
+        for line in merged_lines:
+            orientation = HoughBundler().get_orientation(line[0])
+            if orientation not in orientations:
+                orientations[orientation] = []
+            orientations[orientation].append(line)
 
-        merged_lines, bundled_image = bundle_lines(extended_lines, original_image, step_images)
+        labels = cluster_1d_data(list(orientations.keys()))
+        orientations_clusters = {}
+        for i, label in enumerate(labels):
+            if label not in orientations_clusters:
+                orientations_clusters[label] = []
+            orientations_clusters[label].append(orientations[list(orientations.keys())[i]][0])
+        # create a dict with the two orientations clusters with the most lines
+        orientations_clusters = dict(
+            sorted(orientations_clusters.items(), key=lambda item: len(item[1]), reverse=True)[:2])
 
-        output = cv.cvtColor(bundled_image, cv.COLOR_BGR2GRAY)
-        # merged_lines = []
-        #transform [[x1, y1, x2, y2]] to [(x1, y1), (x2, y2)]
+
+        # find the intersection of the lines
+        black_image = get_black_image(original_image)
+        for orientation_group, lines in orientations_clusters.items():
+            # draw the lines
+            random_color = list(np.random.randint(0, 255, 3))
+            color = (int(random_color[0]), int(random_color[1]), int(random_color[2]))
+            for line in lines:
+                # line is of the form [[x1, y1, x2, y2]]
+                cv.line(black_image, (line[0][0], line[0][1]), (line[0][2], line[0][3]), color, 3)
+        step_images.append(black_image)
+
+        merged_lines1, _ = bundle_lines(list(orientations_clusters.values())[0], original_image, step_images,
+                                        min_distance=100)
+        merged_lines2, _ = bundle_lines(list(orientations_clusters.values())[1], original_image, step_images,
+                                        min_distance=100)
+
+        clustered_lines = list(merged_lines1) + list(merged_lines2)
+        extend_lines_image, extended_lines = extend_lines(clustered_lines, hough_lines_image, step_images)
+
+        merged_lines, bundled_image = bundle_lines(extended_lines, original_image, step_images, min_distance=100)
+
         merged_lines = [((line[0][0], line[0][1]), (line[0][2], line[0][3])) for line in merged_lines]
         line_intersections = get_line_intersections(merged_lines, original_image)
 
@@ -130,11 +158,11 @@ def detect_2dChessboard(original_image, filename):
         for coord in line_intersections:
             cv.circle(black_image, (coord[0], coord[1]), 20, (0, 0, 255), -1)
         step_images.append(black_image)
-        #filter out points that are not in the image
+        # filter out points that are not in the image
         convex_hull = ConvexHull(line_intersections)
         convex_hull_image = get_black_image(original_image)
         # find the 4 points of the convex hull
-        #draw the convex hull
+        # draw the convex hull
         line_intersections = np.array(line_intersections)
         cv.drawContours(convex_hull_image, [line_intersections[convex_hull.vertices]], -1, (0, 255, 0), 2)
         step_images.append(convex_hull_image)
@@ -156,18 +184,14 @@ def detect_2dChessboard(original_image, filename):
         cropped = four_point_transform(original_image, line_intersections)
         # integrate the cropped image into the step images by putting it in the middle of a black image
         black_image = get_black_image(original_image)
-        #make the black image white
-        black_image[:, :, :] = 255
         black_image[0:cropped.shape[0], 0:cropped.shape[1]] = cropped
         step_images.append(black_image)
-
-
-        # return cropped
+        save_images(filename, step_images)
+        return cropped
     except Exception as e:
-        #print the exception tracback
+        # print the exception tracback
         traceback.print_exc()
         save_images(filename, step_images)
-    save_images(filename, step_images)
 
 
 def draw_points(black_image, line_intersections, step_images):
@@ -176,18 +200,46 @@ def draw_points(black_image, line_intersections, step_images):
     step_images.append(black_image)
 
 
-def get_line_intersections(extended_lines, original_image):
-    line_intersections = poly_point_isect.isect_segments(extended_lines, validate=True)
-    line_intersections = np.round(line_intersections).astype(int)
-    line_intersections = [coord for coord in line_intersections if
-                          0 <= coord[0] < original_image.shape[1] and 0 <= coord[1] < original_image.shape[0]]
-    return line_intersections
+def get_line_intersection(line1, line2):
+    from shapely.geometry import LineString
+
+    line1 = LineString(line1)
+    line2 = LineString(line2)
+
+    int_pt = line1.intersection(line2)
+    if int_pt.is_empty:
+        return None
+
+    return int_pt.x, int_pt.y
 
 
-def bundle_lines(lines, image, step_images):
+def get_intersections(lines):
+    intersections = []
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            # find the intersection of the two lines
+            intersection = get_line_intersection(lines[i], lines[j])
+            if intersection is not None:
+                intersections.append(intersection)
+    return intersections
+
+
+def get_line_intersections(lines, original_image):
+    try:
+        line_intersections = get_intersections(lines)
+        line_intersections = np.round(line_intersections).astype(int)
+        line_intersections = [coord for coord in line_intersections if
+                              0 <= coord[0] < original_image.shape[1] and 0 <= coord[1] < original_image.shape[0]]
+        return line_intersections
+    except ValueError:
+        lines = [((line[0][0], line[0][1]), (line[0][2], line[0][3])) for line in lines]
+        return get_line_intersections(lines, original_image)
+
+
+def bundle_lines(lines, image, step_images, min_distance=10):
     # bundle the lines
     lines = np.array(lines)
-    merged_lines = HoughBundler(min_distance=10, min_angle=5).process_lines(lines)
+    merged_lines = HoughBundler(min_distance=min_distance, min_angle=10).process_lines(lines)
     output = drawLines(merged_lines, image, step_images)
     return merged_lines, output
 
@@ -253,11 +305,10 @@ def save_images(filename, step_images):
         final_image[y * height + y_offset:y * height + y_offset + resized_height,
         x * width + x_offset:x * width + x_offset + resized_width] = resized_image
     name, extension = os.path.splitext(filename)
-    cv.imwrite(name + "_steps" + extension, final_image)
+    cv.imwrite("output/" + name + "_steps" + extension, final_image)
 
 
 def find_contours(image, original_image, step_images):
-    print("find_contours")
     try:
         contours, hierarchy = cv.findContours(image, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
         contours_image = get_black_image(original_image)
@@ -279,7 +330,7 @@ def hough_lines(image, original_image, step_images):
         threshold = 50
         lines = None
         minLineLength = 200
-        maxLineGap = 100
+        maxLineGap = 10
         p = cv.HoughLinesP(image, rho, theta, threshold, lines, minLineLength, maxLineGap)
         lines = p
     except cv.error:
@@ -296,11 +347,10 @@ def extend_lines(lines, original_image, step_images):
         extended_lines = []
         for line in lines:
             line = line[0]
-            p1, p2 = extend_line((line[0], line[1]), (line[2], line[3]))
+            p1, p2 = extend_line((line[0], line[1]), (line[2], line[3]), distance=original_image.shape[0])
             extended_lines.append([[p1[0], p1[1], p2[0], p2[1]]])
         image_with_lines = drawLines(extended_lines, original_image, step_images, on_origin_image=False)
         return image_with_lines, extended_lines
-
 
 
 def cornerharris(image, original_image, step_images):
@@ -328,6 +378,7 @@ def drawLines(lines, original_image, step_images, on_origin_image=False):
 
 
 def get_black_image(original_image):
+    # get a grey scale image
     black_image = np.zeros((original_image.shape[0], original_image.shape[1], 3), np.uint8)
 
     return black_image
@@ -369,6 +420,40 @@ def extend_line(p1, p2, distance=10000):
     p4_x = int(p1[0] - distance * np.cos(diff))
     p4_y = int(p1[1] - distance * np.sin(diff))
     return (p3_x, p3_y), (p4_x, p4_y)
+
+
+def get_orientation(line: [int, int, int, int]):
+    orientation = math.atan2(abs((line[3] - line[1])), abs((line[2] - line[0])))
+    return math.degrees(orientation)
+
+
+def get_average_orientation(lines):
+    orientations = []
+    for line in lines:
+        orientations.append(get_orientation(line))
+    print(orientations)
+    mean = np.mean(orientations)
+    print(mean)
+    return np.average(orientations)
+
+
+def merge_line_segments(lines):
+    orientation = get_orientation(lines[0])
+    if len(lines) == 1:
+        return np.block([[lines[0][:2], lines[0][2:]]])
+
+    points = []
+    for line in lines:
+        points.append(line[:2])
+        points.append(line[2:])
+    if 45 < orientation <= 90:
+        # sort by y
+        points = sorted(points, key=lambda point: point[1])
+    else:
+        # sort by x
+        points = sorted(points, key=lambda point: point[0])
+
+    return np.block([[points[0], points[-1]]])
 
 
 class HoughBundler:
@@ -444,25 +529,6 @@ class HoughBundler:
 
         return groups
 
-    def merge_line_segments(self, lines):
-        orientation = self.get_average_orientation(lines)
-        # orientation = self.get_orientation(lines[0])
-        if len(lines) == 1:
-            return np.block([[lines[0][:2], lines[0][2:]]])
-
-        points = []
-        for line in lines:
-            points.append(line[:2])
-            points.append(line[2:])
-        if 45 < orientation <= 90:
-            # sort by y
-            points = sorted(points, key=lambda point: point[1])
-        else:
-            # sort by x
-            points = sorted(points, key=lambda point: point[0])
-
-        return np.block([[points[0], points[-1]]])
-
     def process_lines(self, lines):
         if lines is None:
             print("No lines found to merge")
@@ -488,87 +554,15 @@ class HoughBundler:
                 groups = self.merge_lines_into_groups(i)
                 merged_lines = []
                 for group in groups:
-                    merged_lines.append(self.merge_line_segments(group))
+                    merged_lines.append(merge_line_segments(group))
                 merged_lines_all.extend(merged_lines)
 
         return np.asarray(merged_lines_all)
 
-    def get_average_orientation(self, lines):
-        orientations = []
-        for line in lines:
-            orientations.append(self.get_orientation(line))
-        return np.average(orientations)
 
 
-def intersection(line1, line2):
-    rho1, theta1 = line1[0]
-    rho2, theta2 = line2[0]
-    A = np.array([
-        [np.cos(theta1), np.sin(theta1)],
-        [np.cos(theta2), np.sin(theta2)]
-    ])
-    b = np.array([[rho1], [rho2]])
-    x0, y0 = np.linalg.solve(A, b)
-    x0, y0 = int(np.round(x0)), int(np.round(y0))
-    return [[x0, y0]]
-
-
-from collections import defaultdict, Counter
-
-
-def segment_by_angle_kmeans(lines, k=2, **kwargs):
-    """Groups lines based on angle with k-means.
-
-    Uses k-means on the coordinates of the angle on the unit circle
-    to segment `k` angles inside `lines`.
-    """
-
-    # Define criteria = (type, max_iter, epsilon)
-    default_criteria_type = cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER
-    criteria = kwargs.get('criteria', (default_criteria_type, 10, 1.0))
-    flags = kwargs.get('flags', cv.KMEANS_RANDOM_CENTERS)
-    attempts = kwargs.get('attempts', 10)
-
-    # returns angles in [0, pi] in radians
-    angles = np.array([line[0][1] for line in lines])
-    # multiply the angles by two and find coordinates of that angle
-    pts = np.array([[np.cos(2 * angle), np.sin(2 * angle)]
-                    for angle in angles], dtype=np.float32)
-
-    # run kmeans on the coords
-    labels, centers = cv.kmeans(pts, k, None, criteria, attempts, flags)[1:]
-    labels = labels.reshape(-1)  # transpose to row vec
-
-    # segment lines based on their kmeans label
-    segmented = defaultdict(list)
-    for i, line in enumerate(lines):
-        segmented[labels[i]].append(line)
-    segmented = list(segmented.values())
-    return segmented
-
-
-def segmented_intersections(lines):
-    """Finds the intersections between groups of lines."""
-
-    intersections = []
-    for i, group in enumerate(lines[:-1]):
-        for next_group in lines[i + 1:]:
-            for line1 in group:
-                for line2 in next_group:
-                    intersections.append(intersection(line1, line2))
-
-    return intersections
-
-
-# iterate over all the files in the input folder and print the index of the file
-images = "../assets/chessboard_images"
-for index, filename in enumerate(os.listdir(images)):
-    valid_extensions = ('.jpg', '.jpeg', '.png')
-
-    # check if the file is an image
-    if not filename.lower().endswith(valid_extensions):
-        continue
-    print("Processing image: ", index, "out of ", len(os.listdir(images)))
-    original_image = cv.imread(os.path.join(images, filename))
-
-    cropped = detect_2dChessboard(original_image, filename)
+def clean_ouput_folder():
+    os.system("rm -rf output/*")
+    # create the ouput folder if it doesn't exist:
+    if not os.path.exists("output"):
+        os.makedirs("output")

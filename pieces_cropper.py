@@ -1,6 +1,8 @@
 import cv2 as cv
 
-from src.piece_predictor import PiecePredictor
+from piece_predictor import PiecePredictor
+
+piece_predictor = PiecePredictor()
 
 
 def crop_squares(board_image):
@@ -24,7 +26,6 @@ def crop_pieces(board_image):
     # crop the pieces from the board image
     # return a list of images of the pieces
     squares = crop_squares(board_image)
-    piece_predictor = PiecePredictor()
     # make the prediction multithreaded
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor() as executor:
